@@ -1,0 +1,322 @@
+---
+title: "markdown"
+author: "Drew Dahlquist"
+date: "4/8/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Getting data
+
+```{r}
+# get all unique player id's
+ids = unique(logs$player_id)
+
+# alloc matrix
+X = matrix(NA, nrow=length(ids), ncol=2)
+rownames(X) = ids
+colnames(X) = c("time", "stacks")
+
+# record each player's total time taken and total # of stacks completes
+for(id in ids) {
+  time = log(max(na.omit(logs[logs$player_id == id,"event_time_dbl"]))) # using log(time)
+  stacks = length(unique(na.omit(logs[logs$player_id == id,"stack_id"])))
+  X[toString(id),] = c(time,stacks)
+}
+```
+
+### Raw data plot
+
+```{r}
+# plot of data
+plot(X,xlab="log(time taken)",ylab="total stacks", pch=20, cex=2)
+
+# median & middle 90th percentile
+abline(v=quantile(X[,"time"], c(.25,.5,.75)),col=c("blue","red","blue"))
+
+# print(quantile(exp(X[,"time"]), 0.5)/3600)
+# print(mean(exp(X[,"time"]))/3600)
+```
+
+### Getting Player1's path
+
+```{r}
+# player 1
+pid = "6607011"
+
+# alloc matrix
+Player1 = matrix(NA, nrow=1641, ncol=2)
+colnames(Player1) = c("time", "stacks")
+
+# player data (from logs file)
+# player_time = log(na.omit(logs[logs$player_id == pid & !is.na(logs$event_time_dbl) & !is.na(logs$stack_id),"event_time_dbl"])) # using log(time)
+# player_stack = na.omit(logs[logs$player_id == pid & !is.na(logs$event_time_dbl) & !is.na(logs$stack_id),"stack_id"])
+
+# player data (from player file)
+player_time = log(na.omit(player1[!is.na(player1$event_time_dbl) & !is.na(player1$stack_id),"event_time_dbl"])) # using log(time)
+player_stack = na.omit(player1[!is.na(player1$event_time_dbl) & !is.na(player1$stack_id),"stack_id"])
+
+player_stacks = matrix(NA, nrow=1, ncol=length(player_stack))
+for(i in 1:length(player_stack)) {
+  for(j in 1:i) {
+    # num = length(unique(player_stack[1:j]))
+    num = length(as.set(player_stack[1:j]))
+  }
+  player_stacks[,i] = num
+}
+
+Player1[,] = c(player_time,player_stacks)
+```
+
+### Getting Player2's path
+
+```{r}
+# player 2
+pid = "6486029"
+
+# alloc matrix
+Player2 = matrix(NA, nrow=2170, ncol=2)
+colnames(Player2) = c("time", "stacks")
+
+# player data (from logs file)
+# player_time = log(na.omit(logs[logs$player_id == pid & !is.na(logs$event_time_dbl) & !is.na(logs$stack_id),"event_time_dbl"])) # using log(time)
+# player_stack = na.omit(logs[logs$player_id == pid & !is.na(logs$event_time_dbl) & !is.na(logs$stack_id),"stack_id"])
+
+# player data (from player file)
+player_time = log(na.omit(player2[!is.na(player2$event_time_dbl) & !is.na(player2$stack_id),"event_time_dbl"])) # using log(time)
+player_stack = na.omit(player2[!is.na(player2$event_time_dbl) & !is.na(player2$stack_id),"stack_id"])
+
+player_stacks = matrix(NA, nrow=1, ncol=length(player_stack))
+for(i in 1:length(player_stack)) {
+  for(j in 1:i) {
+    # num = length(unique(player_stack[1:j]))
+    num = length(as.set(player_stack[1:j]))
+  }
+  player_stacks[,i] = num
+}
+
+Player2[,] = c(player_time,player_stacks)
+```
+
+### Plotting Player{1,2}'s path on data
+
+```{r}
+# plot of data
+plot(X,xlab="log(time taken)",ylab="total stacks", pch=20, cex=2)
+lines(Player1, type="l", col="blue", lwd=2)
+lines(Player2, type="l", col="orange", lwd=2)
+legend("topleft", c("Player 1", "Player 2"), lty=c(1,1),col=c("blue","orange"))
+```
+
+### K means, I'm not a fan
+
+```{r}
+set.seed(1)
+
+km.out = kmeans(X,6,nstart=50)
+
+plot(X[,"time"],X[,"stacks"], col=(km.out$cluster +1), main="K-Means Clustering Results with K=6", xlab="log(time taken)", ylab="total stacks", pch=20, cex=2)
+```
+
+6 clusters: 4 (left) of starting, middle, late, & finished players, 2 (right) of players that have given up
+
+### DB scan
+
+```{r}
+library(dbscan)
+
+set.seed(1)
+
+db.out = dbscan(X, eps=1.01, minPts=5)
+
+plot(X,col=db.out$cluster+1,main="DBSCAN",xlab="log(time taken)",ylab="total stacks", pch=20, cex=2)
+
+# individual player's paths
+# lines(Player1, type="l", col="blue", lwd=2)
+# lines(Player2, type="l", col="orange", lwd=2)
+# legend("topleft", c("Player 1", "Player 2"), lty=c(1,1),col=c("blue","orange"))
+```
+
+Above DB-Scan results in 3 clusters, each of which may be interpreted as different "stages" of players.
+
+Bottom-left has players that are new, but off to good start.
+
+Top-center has players that are making good progress in a reasonable amount of time.
+
+Bottom-right has players that seem to have given up on the game.
+
+NOTE: eps=1.005 gives 4 clusters, splitting up the early-gamers into a small mid-game group.
+
+### standardize time & stacks values to have mean=0, sd=1, then try DBSCAN with that data, since it relies on dist. metric
+
+```{r}
+# get all unique player id's
+ids = unique(logs$player_id)
+
+# alloc matrix
+X = matrix(NA, nrow=length(ids), ncol=2)
+rownames(X) = ids
+colnames(X) = c("time", "stacks")
+
+# record each player's total time taken and total # of stacks completes
+for(id in ids) {
+  time = log(max(na.omit(logs[logs$player_id == id,"event_time_dbl"]))) # using log(time)
+  stacks = length(unique(na.omit(logs[logs$player_id == id,"stack_id"])))
+  X[toString(id),] = c(time,stacks)
+}
+
+t_m = mean(X[,"time"])
+t_sd = sd(X[,"time"])
+s_m = mean(X[,"stacks"])
+s_sd = sd(X[,"stacks"])
+
+# alloc matrix for normalized X
+X_stand = matrix(NA, nrow=length(ids), ncol=2)
+rownames(X_stand) = ids
+colnames(X_stand) = c("time", "stacks")
+
+# standardize
+for(id in 1:length(ids)) {
+  X_stand[id,] = c((X[id,"time"]-t_m)/t_sd,(X[id,"stacks"]-s_m)/s_sd)
+}
+```
+
+### (X-mu)/sd DBSCAN
+
+```{r}
+library(dbscan)
+
+set.seed(1)
+
+db.out = dbscan(X_stand, eps=.5, minPts=5)
+
+plot(X_stand,col=db.out$cluster+1,main="DBSCAN Standardized",xlab="log(time taken)",ylab="total stacks", pch=20, cex=2)
+```
+
+### Reachability stuff
+
+```{r}
+set.seed(1)
+
+opt.out = optics(X, eps=2, minPts=5)
+db = extractDBSCAN(opt.out, eps_cl = 1.01)
+plot(db,main="DBSCAN Reachability Plot")
+
+opt.out = optics(X_stand, eps=2, minPts=5)
+db = extractDBSCAN(opt.out, eps_cl = 0.5)
+plot(db,main="Standardized DBSCAN Reachability Plot")
+```
+
+### (X-mu)/sd DBSCAN with players
+
+```{r}
+library(dbscan)
+
+set.seed(1)
+
+db.out = dbscan(X_stand, eps=.5, minPts=5)
+
+# alloc matrix for normalized X
+Player1_stand = matrix(NA, nrow=1641, ncol=2)
+colnames(Player1) = c("time", "stacks")
+Player2_stand = matrix(NA, nrow=2170, ncol=2)
+colnames(Player1) = c("time", "stacks")
+
+# means & sd's
+t_m = mean(X[,"time"])
+t_sd = sd(X[,"time"])
+s_m = mean(X[,"stacks"])
+s_sd = sd(X[,"stacks"])
+
+# standardize
+Player1_stand[,] = c((Player1[,"time"]-t_m)/t_sd,(Player1[,"stacks"]-s_m)/s_sd)
+Player2_stand[,] = c((Player2[,"time"]-t_m)/t_sd,(Player2[,"stacks"]-s_m)/s_sd)
+
+plot(X_stand,col=db.out$cluster+1,main="Standardized DBSCAN",xlab="log(time taken)",ylab="total stacks", pch=20, cex=2)
+lines(Player1_stand, type="l", col="blue", lwd=2)
+lines(Player2_stand, type="l", col="orange", lwd=2)
+legend("topleft", c("Player 1", "Player 2"), lty=c(1,1),col=c("blue","orange"))
+```
+
+### Differences between top two clusters
+
+```{r}
+# red = 2 => top-center cluster is # 1
+# blue = 4 => top-center cluster is # 3
+plot(X_stand,col=1,main="Standardized DBSCAN with Score Data",xlab="log(time taken)",ylab="total stacks", pch=20, cex=2)
+points(X_stand[db.out$cluster == 1,],col=2,main="Standardized DBSCAN",xlab="log(time taken)",ylab="total stacks", pch=20, cex=2)
+points(X_stand[db.out$cluster == 3,],col=4,main="Standardized DBSCAN",xlab="log(time taken)",ylab="total stacks", pch=20, cex=2)
+
+for(i in 1:150) {
+  points(X_stand[toString(scores$player_id[i]),"time"], X_stand[toString(scores$player_id[i]),"stacks"], col=7, pch=1, cex=2)
+}
+```
+
+```{r}
+# red = 2 => top-center cluster is # 1
+# blue = 4 => top-center cluster is # 3
+plot(X_stand,col=1,main="Standardized DBSCAN with Score Data",xlab="log(time taken)",ylab="total stacks", pch=20, cex=2)
+points(X_stand[db.out$cluster == 1,],col=2,main="Standardized DBSCAN",xlab="log(time taken)",ylab="total stacks", pch=20, cex=2)
+points(X_stand[db.out$cluster == 3,],col=4,main="Standardized DBSCAN",xlab="log(time taken)",ylab="total stacks", pch=20, cex=2)
+
+cluster1_time_mean = mean(X_stand[db.out$cluster == 1,"time"])
+cluster1_stacks_mean = mean(X_stand[db.out$cluster == 1,"stacks"])
+
+cluster3_time_mean = mean(X_stand[db.out$cluster == 3,"time"])
+cluster3_stacks_mean = mean(X_stand[db.out$cluster == 3,"stacks"])
+
+points(cluster1_time_mean, cluster1_stacks_mean, col=3, pch=20, cex=3)
+points(cluster3_time_mean, cluster3_stacks_mean, col=3, pch=20, cex=3)
+```
+
+```{r}
+# alloc matrix for mean scores for each id
+scores_stats = matrix(NA, nrow=length(unique(na.omit(scores)$player_id)), ncol=4)
+rownames(scores_stats) = unique(na.omit(scores)$player_id)
+colnames(scores_stats) = c("mean",".25","median",".75")
+
+# compute mean scores
+for(id in unique(na.omit(scores)$player_id)) {
+  scores_stats[toString(id),] = c(mean(scores[na.omit(scores)$player_id == toString(id),"S5_mean"]),quantile(scores[na.omit(scores)$player_id == toString(id),"S5_mean"], c(0.25,0.50,0.75)))
+}
+
+# alloc matrix for cluster stats
+cluster1_score_stats = matrix(NA, nrow=length(intersect(rownames(X_stand[db.out$cluster == 1,]),rownames(scores_stats))), ncol=4)
+rownames(cluster1_score_stats) = unique(intersect(rownames(X_stand[db.out$cluster == 1,]),rownames(scores_stats)))
+colnames(cluster1_score_stats) = c("mean",".25","median",".75")
+
+# cluster 1  scores stats
+for(id in intersect(rownames(X_stand[db.out$cluster == 1,]),rownames(scores_stats))) {
+  cluster1_score_stats[id,] = scores_stats[id,]
+}
+
+# alloc matrix for cluster stats
+cluster3_score_stats = matrix(NA, nrow=length(intersect(rownames(X_stand[db.out$cluster == 3,]),rownames(scores_stats))), ncol=4)
+rownames(cluster3_score_stats) = unique(intersect(rownames(X_stand[db.out$cluster == 3,]),rownames(scores_stats)))
+colnames(cluster3_score_stats) = c("mean",".25","median",".75")
+
+# cluster 3  scores stats
+for(id in intersect(rownames(X_stand[db.out$cluster == 3,]),rownames(scores_stats))) {
+  cluster3_score_stats[id,] = scores_stats[id,]
+}
+
+# median of cluster 1 means, percentiles
+# print(median(cluster1_score_stats[,"mean"]))
+# print(median(cluster1_score_stats[,".25"]))
+# print(median(cluster1_score_stats[,"median"]))
+# print(median(cluster1_score_stats[,".75"]))
+
+# print("----------------")
+
+# median of cluster 3 means, percentiles
+# print(median(cluster3_score_stats[,"mean"]))
+# print(median(cluster3_score_stats[,".25"]))
+# print(median(cluster3_score_stats[,"median"]))
+# print(median(cluster3_score_stats[,".75"]))
+
+boxplot(cluster1_score_stats[,"mean"], cluster3_score_stats[,"mean"], col=c(2,4), main="Plot of Mean Scores from Clusters 1 and 3")
+legend("bottomright", c("Cluster 1", "Cluster 3"), pch=c(20,20), cex=c(2,2), col=c(2,4))
+```
